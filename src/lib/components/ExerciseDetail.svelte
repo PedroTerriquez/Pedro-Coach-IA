@@ -213,13 +213,21 @@
     iniciarLoading = true
     try {
       if (navigator.vibrate) navigator.vibrate(40)
+      // Everything here survives the trip through the notification, so it is
+      // also what the full-screen rest timer can show while resting.
       onStartRest?.({
         name: displayName,
         restSec: exercise.rest,
         tag: 'rest-' + Date.now(),
         sets: exercise.sets,
         reps: exercise.reps,
-        exerciseId: exercise.exerciseId || exercise.id
+        exerciseId: exercise.exerciseId || exercise.id,
+        muscle: exercise.muscle,
+        imgUrl: exercise.imgUrl,
+        gifUrl: exercise.gifUrl,
+        units,
+        lastWeight: lastLog?.weight || 0,
+        maxWeight
       })
     } finally {
       iniciarLoading = false

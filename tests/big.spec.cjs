@@ -1797,9 +1797,10 @@ test.describe('Rest timer notification flow', () => {
     })
     await page.waitForTimeout(1000)
 
-    const banner = page.locator('[data-component="RestTimerBanner"]')
-    await expect(banner).toBeVisible({ timeout: 3000 })
-    await expect(banner).toContainText('Press de Banca con Barra')
+    // Tapping the start notification now opens the timer full screen.
+    const timer = page.locator('[data-component="RestTimerFullscreen"]')
+    await expect(timer).toBeVisible({ timeout: 3000 })
+    await expect(timer).toContainText('Press de Banca con Barra')
 
     expect(startTimerPayload).not.toBeNull()
     const payload = JSON.parse(startTimerPayload)
@@ -1817,7 +1818,7 @@ test.describe('Rest timer notification flow', () => {
 
     // The "Saltar" button cancels the queued delayed push (tapping the card
     // itself no longer cancels — avoids accidental cancels).
-    await banner.locator('.rtb-skip').click()
+    await timer.locator('.rtf-skip').click()
     await page.waitForTimeout(500)
     expect(cancelPayload).not.toBeNull()
     const cancelData = JSON.parse(cancelPayload)
@@ -1851,6 +1852,7 @@ test.describe('Rest timer notification flow', () => {
 
     // Banner is decorative: it just disappears. No "Descanso terminado" toast —
     // that message belongs to the delayed push (avoids a double notification).
+    await expect(page.locator('[data-component="RestTimerFullscreen"]')).toHaveCount(0)
     await expect(page.locator('[data-component="RestTimerBanner"]')).toHaveCount(0)
     const toastText = await page.evaluate(() => {
       const t = document.getElementById('backup-toast')
@@ -1891,8 +1893,336 @@ test.describe('Rest timer notification flow', () => {
     })
     await page.waitForTimeout(1000)
 
-    await expect(page.locator('[data-component="RestTimerBanner"]')).toBeVisible({ timeout: 3000 })
+    await expect(page.locator('[data-component="RestTimerFullscreen"]')).toBeVisible({ timeout: 3000 })
     expect(startCalls).toBe(1)
+  })
+})
+
+test.describe('Rest timer — pantalla completa', () => {
+  test('shows the exercise data, adjusts the rest, minimizes to the banner and back', async ({ page }) => {
+    const startPayloads = []
+    await page.route(/rest-timer\/start/, async (route) => {
+      startPayloads.push(JSON.parse(route.request().postData()))
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'scheduled' }) })
+    })
+    let cancelPayload = null
+    await page.route(/rest-timer\/cancel/, async (route) => {
+      cancelPayload = route.request().postData()
+      await route.fulfill({ status: 200, contentType: 'application/json', body: 'ok' })
+    })
+
+    await page.goto('today')
+    await page.waitForTimeout(600)
+
+    // Same payload the SW caches on notification tap — now carrying everything
+    // the full-screen timer renders (serie, músculo, última, récord, siguiente).
+    await page.evaluate(async () => {
+      const cache = await caches.open('rest-pending')
+      await cache.put('/pending', new Response(JSON.stringify({
+        name: 'Press Banca', restSec: 120, sets: 4, reps: '8-10', exerciseId: 'ex-bench',
+        muscle: 'Chest', units: 'kg', lastWeight: 60, maxWeight: 70, setIndex: 2,
+      })))
+      await cache.put('/from-notification', new Response('1'))
+      window.dispatchEvent(new Event('focus'))
+      await new Promise(r => setTimeout(r, 300))
+    })
+    await page.waitForTimeout(1000)
+
+    const timer = page.locator('[data-component="RestTimerFullscreen"]')
+    await expect(timer).toBeVisible({ timeout: 3000 })
+
+    // The clock is the hero and the exercise context sits under it.
+    await expect(timer.locator('.rtf-time')).toContainText(/[12]:\d\d/)
+    await expect(timer.locator('.rtf-serie-label')).toContainText('Serie 2 de 4')
+    await expect(timer.locator('.rtf-dot.is-now')).toHaveCount(1)
+    await expect(timer.locator('.rtf-chip')).toContainText('Chest')
+    await expect(timer.locator('.rtf-stats')).toContainText('60kg')
+    await expect(timer.locator('.rtf-stats')).toContainText('70kg')
+
+    // "+30 s" pushes the end back and re-queues the delayed push under a new tag.
+    const beforeAdjust = startPayloads.length
+    await timer.getByRole('button', { name: '+30 s' }).click()
+    await page.waitForTimeout(800)
+    expect(startPayloads.length).toBe(beforeAdjust + 1)
+    const [first, second] = [startPayloads[beforeAdjust - 1], startPayloads[beforeAdjust]]
+    expect(second.endTime - first.endTime).toBeGreaterThan(25000)
+    expect(second.tag).not.toBe(first.tag)
+    expect(second.restSec).toBe(150)
+    await expect(timer.locator('.rtf-time')).toContainText(/2:[23]\d/)
+
+    // "Reiniciar descanso" restarts the rest right away — no tapeable start
+    // notification (that one only comes from Iniciar), but it does re-queue the
+    // delayed push, same as any other rest.
+    const beforeRestart = startPayloads.length
+    await timer.getByRole('button', { name: 'Reiniciar descanso' }).click()
+    await page.waitForTimeout(800)
+    expect(startPayloads.length).toBe(beforeRestart + 1)
+    const restarted = startPayloads[beforeRestart]
+    expect(restarted.restSec).toBe(150)
+    expect(restarted.tag).not.toBe(second.tag)
+    await expect(timer.locator('.rtf-time')).toContainText(/2:(2[89]|30)/)
+    // Restarting is not a new set — you are still resting the same one.
+    await expect(timer.locator('.rtf-serie-label')).toContainText('Serie 2 de 4')
+
+    // Minimizing collapses to the floating banner; tapping it re-opens full screen.
+    await timer.getByRole('button', { name: 'Minimizar descanso' }).click()
+    await expect(page.locator('[data-component="RestTimerFullscreen"]')).toHaveCount(0)
+    const banner = page.locator('[data-component="RestTimerBanner"]')
+    await expect(banner).toBeVisible()
+    await banner.locator('.rtb-open').click()
+    await expect(page.locator('[data-component="RestTimerFullscreen"]')).toBeVisible()
+    await expect(page.locator('[data-component="RestTimerBanner"]')).toHaveCount(0)
+
+    // Saltar still cancels the queued push and clears the timer.
+    await page.locator('[data-component="RestTimerFullscreen"] .rtf-skip').click()
+    await page.waitForTimeout(500)
+    expect(cancelPayload).not.toBeNull()
+    await expect(page.locator('[data-component="RestTimerFullscreen"]')).toHaveCount(0)
+  })
+})
+
+test.describe('Rest timer — registro de series', () => {
+  // The rest is when you write down the set you just finished. Uniform sets
+  // stay a single record; the first set that differs turns today's log into
+  // the detailed one (blocks), the same shape the block editor writes.
+  test('registers weight and reps per set, collapsing to one record while they match', async ({ page }) => {
+    await page.route(/rest-timer\/(start|cancel)/, async (route) => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'ok' }) })
+    })
+
+    const openRestForSet = async (setIndex) => {
+      await page.evaluate(async (idx) => {
+        const cache = await caches.open('rest-pending')
+        await cache.put('/pending', new Response(JSON.stringify({
+          name: 'Press Banca', restSec: 120, sets: 3, reps: '8-10', exerciseId: 'ex-bench',
+          muscle: 'Chest', units: 'kg', lastWeight: 60, maxWeight: 70, setIndex: idx,
+        })))
+        await cache.put('/from-notification', new Response('1'))
+        window.dispatchEvent(new Event('focus'))
+        await new Promise(r => setTimeout(r, 300))
+      }, setIndex)
+      await page.waitForTimeout(900)
+      const timer = page.locator('[data-component="RestTimerFullscreen"]')
+      await expect(timer).toBeVisible({ timeout: 3000 })
+      return timer
+    }
+
+    const todayLog = () => page.evaluate(async () => {
+      const d = new Date(Date.now() - new Date().getTimezoneOffset() * 60000)
+      const today = d.toISOString().slice(0, 10)
+      const req = indexedDB.open('coach-pedro-ai', 2)
+      const db = await new Promise((res, rej) => { req.onsuccess = () => res(req.result); req.onerror = () => rej(req.error) })
+      const store = db.transaction('exerciseLogs', 'readonly').objectStore('exerciseLogs')
+      const all = await new Promise((res, rej) => { const r = store.getAll(); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error) })
+      db.close()
+      return all.find(l => l.exerciseId === 'ex-bench' && l.date === today) || null
+    })
+
+    await page.goto('today')
+    await page.waitForTimeout(600)
+
+    // Serie 1 — seeded from "última" (60kg) and the prescribed reps (10).
+    let timer = await openRestForSet(1)
+    await expect(timer.locator('.rtf-log-title')).toContainText('Registrar serie 1')
+    await expect(timer.locator('.rtf-field-input').first()).toHaveValue('60')
+    await expect(timer.locator('.rtf-field-input').nth(1)).toHaveValue('10')
+
+    await timer.getByRole('button', { name: 'Más peso' }).click()
+    await page.waitForTimeout(900)
+    await expect(timer.locator('.rtf-log-saved')).toBeVisible()
+    await expect(timer.locator('.rtf-log-recap')).toContainText('S1 62.5kg×10')
+
+    let log = await todayLog()
+    expect(log).not.toBeNull()
+    expect(log.weight).toBe(62.5)
+    expect(log.sets).toBe(1)
+    expect(log.reps).toBe('10')
+    expect(log.blocks).toBeUndefined()
+
+    // Serie 2 with the same peso/reps — still one record, now 2 series.
+    await timer.locator('.rtf-skip').click()
+    await page.waitForTimeout(400)
+    timer = await openRestForSet(2)
+    // Seeded from serie 1, so a single tap up and back down leaves it identical.
+    await expect(timer.locator('.rtf-field-input').first()).toHaveValue('62.5')
+    await timer.getByRole('button', { name: 'Más peso' }).click()
+    await timer.getByRole('button', { name: 'Menos peso' }).click()
+    await page.waitForTimeout(900)
+    log = await todayLog()
+    expect(log.weight).toBe(62.5)
+    expect(log.sets).toBe(2)
+    expect(log.blocks).toBeUndefined()
+
+    // Serie 3 heavier and shorter — now the log has to keep the detail.
+    await timer.locator('.rtf-skip').click()
+    await page.waitForTimeout(400)
+    timer = await openRestForSet(3)
+    await timer.getByRole('button', { name: 'Más peso' }).click()
+    await timer.getByRole('button', { name: 'Menos reps' }).click()
+    await timer.getByRole('button', { name: 'Menos reps' }).click()
+    await page.waitForTimeout(900)
+    await expect(timer.locator('.rtf-log-recap')).toContainText('S3 65kg×8')
+
+    log = await todayLog()
+    expect(log.blocks).toEqual([
+      { sets: 2, reps: 10, weight: 62.5 },
+      { sets: 1, reps: 8, weight: 65 },
+    ])
+    expect(log.sets).toBe(3)
+    expect(log.weight).toBe(65)
+    expect(log.reps).toBe('8')
+
+    // Reopening the same set shows what was registered, not a fresh guess.
+    await timer.locator('.rtf-skip').click()
+    await page.waitForTimeout(400)
+    timer = await openRestForSet(3)
+    await expect(timer.locator('.rtf-field-input').first()).toHaveValue('65')
+    await expect(timer.locator('.rtf-field-input').nth(1)).toHaveValue('8')
+    await expect(timer.locator('.rtf-log-saved')).toBeVisible()
+
+    // The fields cost a chunk of height, so the clock is what gives way — on
+    // every phone size, and without ever colliding with the −15 s / +30 s
+    // buttons that now sit either side of the ring.
+    for (const size of [
+      { width: 320, height: 568 },  // iPhone SE 1
+      { width: 375, height: 667 },  // iPhone SE 2/3
+      { width: 390, height: 844 },  // iPhone 14
+      { width: 430, height: 932 },  // iPhone 15 Pro Max
+    ]) {
+      await page.setViewportSize(size)
+      await page.waitForTimeout(350)
+      const ring = await timer.locator('.rtf-ring-wrap').boundingBox()
+      const actions = await timer.locator('.rtf-actions').boundingBox()
+      const minus = await timer.locator('.rtf-nudge-minus').boundingBox()
+      const plus = await timer.locator('.rtf-nudge-plus').boundingBox()
+      const fields = await timer.locator('.rtf-log-grid').boundingBox()
+
+      expect(ring.height, `ring too small at ${size.width}`).toBeGreaterThan(140)
+      expect(Math.round(ring.width)).toBe(Math.round(ring.height))
+      expect(ring.x, `ring hits −15 s at ${size.width}`).toBeGreaterThanOrEqual(minus.x + minus.width)
+      expect(ring.x + ring.width, `ring hits +30 s at ${size.width}`).toBeLessThanOrEqual(plus.x)
+      // Everything stays on screen: nothing clipped, nothing scrolls sideways.
+      expect(actions.y + actions.height).toBeLessThanOrEqual(size.height)
+      expect(fields.x).toBeGreaterThanOrEqual(0)
+      expect(fields.x + fields.width).toBeLessThanOrEqual(size.width)
+      const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+      expect(overflow, `horizontal overflow at ${size.width}`).toBeLessThanOrEqual(0)
+      // The digits track the ring instead of spilling out of it.
+      const digits = await timer.locator('.rtf-time').boundingBox()
+      expect(digits.width).toBeLessThan(ring.width)
+      // And the values are never clipped ("62." instead of "62.5").
+      const clipped = await timer.locator('.rtf-field-input').evaluateAll(
+        els => els.filter(el => el.scrollWidth > el.clientWidth + 1).length
+      )
+      expect(clipped, `clipped field at ${size.width}`).toBe(0)
+    }
+  })
+
+  // A plain "60kg" record (the simple path of the detail sheet) carries no
+  // reps. Registering a later set must adopt the reps you are logging instead
+  // of writing a block of "0 reps".
+  test('a plain weight-only log does not turn into 0-rep blocks', async ({ page }) => {
+    await page.route(/rest-timer\/(start|cancel)/, async (route) => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'ok' }) })
+    })
+
+    await page.goto('today')
+    await page.waitForTimeout(600)
+
+    const today = await page.evaluate(() => {
+      const d = new Date(Date.now() - new Date().getTimezoneOffset() * 60000)
+      return d.toISOString().slice(0, 10)
+    })
+    await seedIndexedDB(page, {
+      exercises: [{ id: 'ex-bench', name: 'Press Banca', muscle: 'Chest', imgUrl: '', gifUrl: '', tips: [], alternatives: [] }],
+      exerciseLogs: [{ id: 'log-plain', exerciseId: 'ex-bench', date: today, weight: 60, units: 'kg' }],
+      settings: { id: 'settings', units: 'kg', accentColor: '#d4ff3a', language: 'es' },
+    })
+    await page.reload()
+    await page.waitForTimeout(800)
+
+    await page.evaluate(async () => {
+      const cache = await caches.open('rest-pending')
+      await cache.put('/pending', new Response(JSON.stringify({
+        name: 'Press Banca', restSec: 120, sets: 3, reps: '8-10', exerciseId: 'ex-bench',
+        units: 'kg', lastWeight: 60, setIndex: 2,
+      })))
+      await cache.put('/from-notification', new Response('1'))
+      window.dispatchEvent(new Event('focus'))
+      await new Promise(r => setTimeout(r, 300))
+    })
+    await page.waitForTimeout(900)
+
+    const timer = page.locator('[data-component="RestTimerFullscreen"]')
+    await expect(timer).toBeVisible({ timeout: 3000 })
+    await timer.getByRole('button', { name: 'Más peso' }).click()
+    await page.waitForTimeout(900)
+
+    const log = await page.evaluate(async (date) => {
+      const req = indexedDB.open('coach-pedro-ai', 2)
+      const db = await new Promise((res, rej) => { req.onsuccess = () => res(req.result); req.onerror = () => rej(req.error) })
+      const store = db.transaction('exerciseLogs', 'readonly').objectStore('exerciseLogs')
+      const all = await new Promise((res, rej) => { const r = store.getAll(); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error) })
+      db.close()
+      return all.find(l => l.exerciseId === 'ex-bench' && l.date === date) || null
+    }, today)
+
+    // Set 1 (the old plain 60kg) inherits the 10 reps being registered.
+    expect(log.blocks).toEqual([
+      { sets: 1, reps: 10, weight: 60 },
+      { sets: 1, reps: 10, weight: 62.5 },
+    ])
+  })
+
+  // The write is debounced ~450ms. Tapping "+" and skipping straight away must
+  // land on the exercise that was on screen, not on whatever rest starts next.
+  test('a set tapped right before Saltar lands on its own exercise', async ({ page }) => {
+    await page.route(/rest-timer\/(start|cancel)/, async (route) => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'ok' }) })
+    })
+
+    await page.goto('today')
+    await page.waitForTimeout(600)
+
+    const openRest = async (exerciseId) => {
+      await page.evaluate(async (id) => {
+        const cache = await caches.open('rest-pending')
+        await cache.put('/pending', new Response(JSON.stringify({
+          name: id, restSec: 120, sets: 3, reps: '8-10', exerciseId: id,
+          units: 'kg', lastWeight: 60, setIndex: 1,
+        })))
+        await cache.put('/from-notification', new Response('1'))
+        window.dispatchEvent(new Event('focus'))
+        await new Promise(r => setTimeout(r, 300))
+      }, exerciseId)
+      await page.waitForTimeout(900)
+      const t = page.locator('[data-component="RestTimerFullscreen"]')
+      await expect(t).toBeVisible({ timeout: 3000 })
+      return t
+    }
+
+    const timer = await openRest('ex-first')
+    // Tap and skip immediately — inside the debounce window.
+    await timer.getByRole('button', { name: 'Más peso' }).click()
+    await timer.locator('.rtf-skip').click()
+    await page.waitForTimeout(1200)
+
+    // A different exercise's rest starts right after.
+    await openRest('ex-second')
+    await page.waitForTimeout(1200)
+
+    const logs = await page.evaluate(async () => {
+      const req = indexedDB.open('coach-pedro-ai', 2)
+      const db = await new Promise((res, rej) => { req.onsuccess = () => res(req.result); req.onerror = () => rej(req.error) })
+      const store = db.transaction('exerciseLogs', 'readonly').objectStore('exerciseLogs')
+      const all = await new Promise((res, rej) => { const r = store.getAll(); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error) })
+      db.close()
+      return all.map(l => ({ exerciseId: l.exerciseId, weight: l.weight }))
+    })
+
+    expect(logs.find(l => l.exerciseId === 'ex-first')).toEqual({ exerciseId: 'ex-first', weight: 62.5 })
+    // Nothing was written for the exercise that merely came next.
+    expect(logs.find(l => l.exerciseId === 'ex-second')).toBeUndefined()
   })
 })
 

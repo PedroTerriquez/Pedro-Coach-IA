@@ -1,6 +1,6 @@
-const _VER_BASE = 'v2.65'
-const _VER_DESC = 'Fix push notifications: usa deviceId real en vez de default'
-const _VER_TIME = '2026-09-02 11:19'
+const _VER_BASE = 'v2.66'
+const _VER_DESC = 'Registro de peso y reps por serie en el timer de descanso'
+const _VER_TIME = '2026-09-09 18:31'
 export const APP_VERSION = `${_VER_BASE} · ${_VER_TIME} · ${_VER_DESC}`
 
 let deferredPrompt: any = null

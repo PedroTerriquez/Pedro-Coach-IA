@@ -9,6 +9,7 @@
   import { recordGymSession, getWeeklyGymSeconds } from '$lib/storage'
   import { mondayOf } from '$lib/calendar-utils'
   import { startRestFromExercise, checkPendingRest, _checkRestTimer } from '$lib/rest-timer'
+  import { SET_LOG_EVENT } from '$lib/set-log'
   import { runCoachAnalysis } from '$lib/coach-analysis'
   import { computeStreakWeeks, trainingDaysPerWeek } from '$lib/streak'
   import { resolveWeekOrder } from '$lib/week-order'
@@ -210,12 +211,26 @@
       checkPendingRest()
       _checkRestTimer()
     }
+    const onSWMessage = (e: MessageEvent) => {
+      if (e.data?.type === 'rest-start') {
+        checkPendingRest()
+        _checkRestTimer()
+      }
+    }
+    // The full-screen rest timer registers sets while it is on top of this
+    // page, so it tells us when today's logs changed.
+    const onSetLogged = () => onDetailLog()
+
     document.addEventListener('visibilitychange', onVisible)
     window.addEventListener('focus', onFocusCheck, { passive: true })
+    navigator.serviceWorker?.addEventListener('message', onSWMessage)
+    window.addEventListener(SET_LOG_EVENT, onSetLogged)
 
     const cleanup = () => {
       document.removeEventListener('visibilitychange', onVisible)
       window.removeEventListener('focus', onFocusCheck)
+      navigator.serviceWorker?.removeEventListener('message', onSWMessage)
+      window.removeEventListener(SET_LOG_EVENT, onSetLogged)
     }
 
     ;(async () => {

@@ -9,7 +9,8 @@
     sets = 0,
     reps = '',
     accent = 'var(--accent)',
-    onskip = undefined
+    onskip = undefined,
+    onexpand = undefined
   }: {
     visible: boolean
     endTime: number
@@ -19,6 +20,7 @@
     reps: string
     accent: string
     onskip?: () => void
+    onexpand?: () => void
   } = $props()
 
   let remainingMs = $state(0)
@@ -52,6 +54,7 @@
 
 {#if visible && remainingMs > 0}
   <div class="rtb" class:is-ending={isEnding} data-component="RestTimerBanner" style="--accent:{accent}">
+    <button class="rtb-open" type="button" aria-label="Abrir descanso a pantalla completa" onclick={onexpand}>
     <div class="rtb-ring-wrap">
       <svg class="rtb-ring" viewBox="0 0 56 56" aria-hidden="true">
         <circle class="rtb-ring-track" cx="28" cy="28" r="24"></circle>
@@ -65,6 +68,7 @@
       <span class="rtb-name">{displayName}</span>
       {#if meta}<span class="rtb-meta">{meta}</span>{/if}
     </div>
+    </button>
     <button class="rtb-skip" type="button" aria-label="Saltar descanso" onclick={onskip}>
       <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M4 3.2l8 5.8-8 5.8V3.2z" fill="currentColor"/><rect x="12.5" y="3" width="2" height="12" rx="1" fill="currentColor"/></svg>
     </button>
@@ -101,6 +105,20 @@
     animation: rtb-in 0.55s var(--ease-smooth);
     will-change: transform, opacity;
   }
+  .rtb-open {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    background: none;
+    border: 0;
+    padding: 0;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .rtb-open:active { transform: scale(0.99); }
   .rtb-ring-wrap {
     position: relative;
     width: 104px;

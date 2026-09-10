@@ -5,8 +5,9 @@
   import TabBar from '$lib/components/TabBar.svelte'
   import Toast from '$lib/components/Toast.svelte'
   import RestTimerBanner from '$lib/components/RestTimerBanner.svelte'
+  import RestTimerFullscreen from '$lib/components/RestTimerFullscreen.svelte'
   import OnboardingBanner from '$lib/components/OnboardingBanner.svelte'
-  import { restBannerState, cancelRestTimer } from '$lib/rest-timer'
+  import { restBannerState, cancelRestTimer, adjustRestTimer, restartRestTimer } from '$lib/rest-timer'
   import { onMount } from 'svelte'
   import { page } from '$app/stores'
   import { ROUTES } from '$lib/routes'
@@ -59,6 +60,16 @@
   }
 
   let bannerStep = $derived(getBannerStep())
+
+  // The rest timer opens full screen; "minimizar" collapses it to the floating
+  // banner. Every new rest (new tag) opens full screen again.
+  let restMinimized = $state(false)
+  let restTag = $derived($restBannerState.tag)
+
+  $effect(() => {
+    restTag
+    restMinimized = false
+  })
 </script>
 
 <svelte:head>
@@ -71,8 +82,18 @@
 
 <TabBar />
 
+<RestTimerFullscreen
+  visible={$restBannerState.visible && !restMinimized}
+  timer={$restBannerState}
+  {accent}
+  onskip={() => cancelRestTimer($restBannerState.tag)}
+  onminimize={() => restMinimized = true}
+  onadjust={(delta) => adjustRestTimer(delta)}
+  onrestart={() => restartRestTimer()}
+/>
+
 <RestTimerBanner
-  visible={$restBannerState.visible}
+  visible={$restBannerState.visible && restMinimized}
   endTime={$restBannerState.endTime}
   restSec={$restBannerState.restSec}
   name={$restBannerState.name}
@@ -80,6 +101,7 @@
   reps={$restBannerState.reps}
   {accent}
   onskip={() => cancelRestTimer($restBannerState.tag)}
+  onexpand={() => restMinimized = false}
 />
 
 {#if bannerStep >= 0}

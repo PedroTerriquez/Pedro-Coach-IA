@@ -23,7 +23,7 @@ src/
   app.d.ts                 → Global types ($service-worker module decl)
   service-worker.js        → SvelteKit SW: network-first, caches scoped by build hash ($service-worker)
   routes/
-    +layout.svelte         → App shell: TabBar, Toast, RestTimerBanner, Onboarding, Coach FAB
+    +layout.svelte         → App shell: TabBar, Toast, RestTimerFullscreen + RestTimerBanner (minimizado), Onboarding, Coach FAB
     +page.svelte           → Redirect: new user → /you, otherwise → /today
     today/                 → Session auto-detect, warmup, rest timer, ⌚ watch button
     plan/                  → Week selector + day grid
@@ -40,7 +40,7 @@ src/
     ai.ts                  → importWithAI, generateProgramWithAI, programCoach, exerciseCoachChat
     coach-analysis.ts      → runCoachAnalysis (post-workout insights)
     push.ts                → subscribePush, unsubscribePush, sendPushNotification, notifyWatch
-    rest-timer.ts          → scheduleRestTimer, completeRest, cancelRestTimer, checkPendingRest
+    rest-timer.ts          → scheduleRestTimer, adjustRestTimer, restartRestTimer, completeRest, cancelRestTimer, checkPendingRest, nextSetIndex
     exercise-utils.ts      → getExerciseDisplayName (es/en), findById, keyword helpers
     calendar-utils.ts      → Date/week/day helpers
     stores/
@@ -219,7 +219,7 @@ today.js → sendPushNotification()
 | File | Role |
 |---|---|
 | `src/lib/push.ts` | `subscribePush()`, `unsubscribePush()`, `sendPushNotification()`, `notifyWatch()` (local fallback) |
-| `src/lib/rest-timer.ts` | `scheduleRestTimer()`, `completeRest()`, `cancelRestTimer()`, `checkPendingRest()` (Cache API + Worker queue) |
+| `src/lib/rest-timer.ts` | `scheduleRestTimer()`, `adjustRestTimer()`, `restartRestTimer()`, `completeRest()`, `cancelRestTimer()`, `checkPendingRest()` (Cache API + Worker queue) |
 | `src/service-worker.js` | `push` event → `showNotification()`; `notificationclick` → opens app + `from-notification` flag |
 | `push-worker/src/index.js` | Endpoints: `/api/push/subscribe`, `/api/push/unsubscribe`, `/api/push/start`, `/api/rest-timer/start`, `/api/rest-timer/cancel`; `queue()` handler |
 | `src/lib/config.ts` | `PUSH_SERVER_URL` + `VAPID_PUBLIC_KEY` (both public by design) |
@@ -251,6 +251,11 @@ today.js → sendPushNotification()
 2. The Worker queue is the PRIMARY mechanism (delivers even when the app is closed).
 3. `scheduleRestTimer()` sends `pushEndTime = endTime - 10000` — the push arrives ~10s before rest ends.
 4. `cancelRestTimer()` POSTs `/api/rest-timer/cancel` — Worker sets KV `cancel_{tag}` so the queue skips delivery.
+5. A rest can start from TWO places, and they share everything except the start notification:
+   - **"Iniciar" (ExerciseDetail)** → `startRestFromExercise()` sends the tapeable start notification; the rest begins when the user taps it. Counts a new set (`nextSetIndex`).
+   - **"Reiniciar descanso" (full-screen timer)** → `restartRestTimer()` starts the rest immediately, with NO start notification. Does NOT count a new set.
+   Both end up in `scheduleRestTimer()` → `armRest()`, so both queue the delayed push identically. Adding a third entry point means reusing `armRest()`, never duplicating the queue call.
+6. `adjustRestTimer(delta)` (`−15 s` / `+30 s`) and `restartRestTimer()` re-queue under a FRESH tag after cancelling the in-flight one — the Worker drops the stale message via `active_{deviceId}`.
 
 ### Key Points
 - Worker queue delivers at EXACTLY the scheduled delay — iOS cannot interfere
@@ -259,6 +264,9 @@ today.js → sendPushNotification()
 - If app is closed at expiry: only the push arrives (correct). If open: toast + push both arrive
 - On `visibilitychange` to visible, `checkPendingRest()` recovers pending timers from Cache API
 - `scheduleRestTimer()` calls BOTH the Worker queue AND starts `setTimeout` — removing either breaks the system
+- The rest UI is full screen (`RestTimerFullscreen`); `RestTimerBanner` is its minimized state. Both are decorative — the push still drives delivery
+- Whatever the timer displays (muscle, última, récord, `setIndex`) must live in `RestPendingData`: that payload is all that survives the notification round trip
+- Set counter lives in `localStorage` (`rest-set-counts`), reset per day — see `docs/superpowers/specs/2026-09-09-fullscreen-rest-timer-design.md`
 - `subscribePush()` always calls `unsubscribe()` before `subscribe()` to replace expired endpoints
 - Error recovery: 410 (expired) → Worker deletes sub, client refreshes subscription and retries; if all Web Push fails → `notifyWatch()` local notification
 
